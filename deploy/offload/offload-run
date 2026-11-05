@@ -1,0 +1,7 @@
+#!/bin/bash
+# Runs one job from its project folder. Started by offload-job@.service or offload-gpu-job@.service.
+set -euo pipefail
+queue="/var/lib/offload/queue/$1"
+cd "/var/lib/offload/jobs/$(cat "$queue/project")"
+echo "== $(date '+%F %T') started =="
+exec /bin/bash "$queue/run.sh"

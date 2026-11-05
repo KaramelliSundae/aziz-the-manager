@@ -1,0 +1,67 @@
+# A heavy job sent from the Mac. Aziz starts and stops it, and it never restarts itself: Aziz decides that.
+# What is inside may be anyone's build script, so it reaches nothing but its own folder and the internet.
+[Unit]
+Description=Offload @KIND@ job %i
+
+[Service]
+Type=exec
+User=offload
+Group=offload
+ExecStart=/usr/local/libexec/offload-run %i
+Environment=HOME=/var/lib/offload/home
+Environment=PATH=/opt/offload-tools/bin:/usr/local/bin:/usr/bin:/bin
+Environment=ANDROID_HOME=/opt/offload-tools/android-sdk JAVA_HOME=/opt/offload-tools/jbr
+StandardInput=null
+StandardOutput=append:/var/lib/offload/queue/%i/log
+StandardError=inherit
+Restart=no
+# Short, so a preempt can hand the GPU to the image app within its 20 seconds.
+TimeoutStopSec=8
+KillMode=control-group
+RuntimeMaxSec=1d
+
+# Everything else on the machine comes first.
+Nice=15
+CPUWeight=20
+CPUQuota=800%
+IOWeight=20
+MemoryHigh=6G
+MemoryMax=8G
+MemorySwapMax=2G
+TasksMax=1024
+LimitFSIZE=20G
+
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/offload
+PrivateTmp=yes
+InaccessiblePaths=-/etc/ai-ders -/var/lib/ai-ders -/var/lib/aziz -/opt/ai-ders -/opt/aziz -/etc/ssh -/etc/polkit-1 @EXTRA_HIDDEN@
+# An empty /run hides every local socket at once (Docker, D-Bus, the mail parser). DNS needs only its own file.
+TemporaryFileSystem=/run:ro
+BindReadOnlyPaths=-/run/systemd/resolve
+@TOOL_BINDS@
+
+# The internet yes; this machine, the home network and the tailnet no. The one exception is the local DNS stub.
+IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+IPAddressAllow=127.0.0.53/32
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+@DEVICES@
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+KeyringMode=private
+UMask=0077
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @module @reboot @swap @raw-io @clock @cpu-emulation @obsolete
+SystemCallErrorNumber=EPERM

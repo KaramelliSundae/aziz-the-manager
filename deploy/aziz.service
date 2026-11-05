@@ -1,0 +1,49 @@
+[Unit]
+Description=Aziz: who gets the GPU, and heavy jobs in order
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=aziz
+Group=aziz
+StateDirectory=aziz
+StateDirectoryMode=0700
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/aziz
+# What this machine calls things: AZIZ_IMAGE_APP_UNIT, AZIZ_IMAGE_APP_HEALTH. See the README.
+EnvironmentFile=-/etc/aziz/env
+# Standard library only: no environment to rebuild when anything else on the machine changes.
+ExecStart=/usr/bin/python3 -m aziz
+Restart=always
+RestartSec=3
+MemoryMax=256M
+
+# Sees the GPU to measure it, holds no credentials, and talks only to this machine.
+IPAddressDeny=any
+IPAddressAllow=localhost
+InaccessiblePaths=-/var/lib/ai-ders -/etc/ai-ders
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+KeyringMode=private
+UMask=0077
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @debug @module @raw-io @reboot @swap @cpu-emulation @obsolete
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

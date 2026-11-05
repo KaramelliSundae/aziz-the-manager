@@ -1,0 +1,15 @@
+[project]
+name = "aziz"
+version = "0.1.0"
+description = "Decides who gets the GPU on one shared machine, and runs heavy jobs in order"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest", "httpx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
