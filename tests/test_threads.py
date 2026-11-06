@@ -48,7 +48,7 @@ def test_requests_from_every_side_at_once(tmp_path):
                     elif choice == 2:
                         answer = client.post(f"{base}/priority", json={"on": rng.random() < 0.5})
                     elif choice == 3:
-                        answer = client.post(f"{base}/mode", json={"mode": rng.choice(("auto", "auto", "image"))})
+                        answer = client.post(f"{base}/mode", json={"mode": rng.choice(("assistant", "assistant", "compute"))})
                     elif choice == 4:
                         answer = client.post(f"{base}/forecast", json={"nextGpu": "unlikely"})
                     elif choice == 5:

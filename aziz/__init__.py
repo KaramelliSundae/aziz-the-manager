@@ -5,4 +5,7 @@ need the GPU, and Aziz decides when they run: CPU jobs leave the model alone, an
 disk, runs, and the model loads straight back, unless the sender said more GPU work is likely soon.
 
 The order: the image app, then a student who asked for priority, then GPU jobs, then the idle model.
+
+Two modes. AI-Asistan (`assistant`) is all of the above. Compute (`compute`) leaves the GPU to work: the same order, with
+the model kept off until the mode changes back.
 """

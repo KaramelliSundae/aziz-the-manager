@@ -6,6 +6,16 @@ first. He was written for [Kamil](https://github.com/KaramelliSundae/kamil-ai-he
 
 **The order:** the image app → a student who asked for priority → GPU jobs → the idle model. CPU jobs never touch the model.
 
+## Two modes
+
+| Mode | Kamil | Jobs and the image app |
+|---|---|---|
+| **AI-Asistan** (`assistant`, the default) | Stays ready, moves aside when work needs the GPU, comes back by itself | Run in the order above |
+| **Compute** (`compute`) | Stays off until you switch back | Run in the same order |
+
+`POST /mode` with `{"mode": "assistant"}` or `{"mode": "compute"}`, the app's Settings, or `ai-ders mode`. The mode survives a
+restart. The old names, `auto` and `image`, still work.
+
 ## Who talks to him
 
 ```mermaid
@@ -28,7 +38,7 @@ stateDiagram-v2
     [*] --> Ready: Aziz starts, GPU free
     Ready --> Disk: GPU job, once his answer finishes
     Ready --> Disk: the image app asks (at once)
-    Ready --> Disk: image mode, or under 2 GB of RAM
+    Ready --> Disk: Compute mode, or under 2 GB of RAM
     Disk --> Loading: job over and more GPU work unlikely
     Disk --> Waiting: job over and more GPU work likely
     Waiting --> Disk: next GPU job within 20 minutes
@@ -43,7 +53,7 @@ stateDiagram-v2
 flowchart TD
     start([GPU job in the queue]) --> pri{Kamil has priority?}
     pri -- yes --> wait[Stays queued, with the reason as its note]
-    pri -- no --> img{Image mode, or an image app hold?}
+    pri -- no --> img{An image app hold?}
     img -- yes --> wait
     img -- no --> try{The image app busy or silent?}
     try -- yes --> wait
@@ -66,7 +76,7 @@ flowchart TD
 | `POST /jobs` | `{id, label, gpu, nextGpu: "likely"\|"unlikely", restart, maxMinutes}`. Aziz starts `offload-gpu-job@ID` or `offload-job@ID` when its turn comes |
 | `GET /jobs/ID`, `POST /jobs/ID/cancel` | One job's status; cancel it |
 | `POST /forecast` | `{nextGpu}`: update the guess. It can end the wait, never extend it |
-| `POST /priority` | `{on}`: Kamil first for 30 minutes. Refused in image mode |
+| `POST /priority` | `{on}`: Kamil first for 30 minutes. Refused in Compute mode |
 | `GET /state`, `GET /log?limit=100` | Everything now; the logbook |
 | `POST /preempt`, `/acquire`, `/mode` | Used by the image app, the Kamil API, and `ai-ders mode` |
 
@@ -120,7 +130,7 @@ finished and the model back. See [docs/scenarios.md](docs/scenarios.md) for each
 
 | File | What goes in it |
 | --- | --- |
-| `/etc/aziz/env` | `AZIZ_IMAGE_APP_UNIT`, the systemd unit of your image app; `AZIZ_IMAGE_APP_HEALTH`, its health address |
+| `/etc/aziz/env` | `AZIZ_IMAGE_APP_UNIT`, the systemd unit of your image app; `AZIZ_IMAGE_APP_HEALTH`, its health address; `AZIZ_IMAGE_APP_NAME`, what to call it on the phone |
 | `/etc/aziz/offload.env` | `OFFLOAD_EXTRA_HIDDEN`, more paths to hide from jobs; `OFFLOAD_TOOL_BINDS`, tools to lend them |
 
 The image app reports `gpuGate: true` and its queue on its health address, and calls `POST /preempt` before it takes the GPU.

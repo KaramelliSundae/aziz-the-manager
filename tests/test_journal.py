@@ -117,13 +117,13 @@ def test_preempt_failures_and_priority_are_written_down(tmp_path):
     aziz.preempt()
     aziz.set_priority(True)
     aziz.set_priority(False)
-    aziz.set_mode("image")
-    aziz.set_mode("image")
-    aziz.set_mode("auto")
+    aziz.set_mode("compute")
+    aziz.set_mode("compute")
+    aziz.set_mode("assistant")
     told = " | ".join(entry["text"] for entry in aziz.journal.recent(20))
     assert "Görsel uygulaması GPU'yu istedi, 0 saniyede boşaldı" in told
     assert "öne alındı" in told and "önceliği bitirildi" in told
-    assert told.count("görsel üretime ayrıldı") == 1 and "otomatiğe" in told
+    assert told.count("GPU işlere ayrıldı") == 1 and "AI-Asistan" in told
 
 
 def test_state_carries_only_the_last_few_and_the_route_gives_more(tmp_path):

@@ -231,9 +231,9 @@ def test_model_stays_off_while_image_app_needs_the_gpu(arbiter, host, state):
     assert host.starts == 0
 
 
-def test_image_mode_keeps_the_model_off(arbiter, host):
+def test_compute_mode_keeps_the_model_off(arbiter, host):
     host.image_app_state = IDLE_IMAGE_APP
-    arbiter.set_mode("image")
+    arbiter.set_mode("compute")
     arbiter.tick()
     assert host.starts == 0
 
@@ -403,16 +403,25 @@ def test_model_left_running_by_a_restart_stays_on(arbiter, host, clock):
     assert host.active is True and host.stops == 0  # a deploy must not cut off an answer that is loading
 
 
-def test_image_mode_stops_the_model_and_blocks_it(arbiter, host):
+def test_compute_mode_stops_the_model_and_blocks_it(arbiter, host):
     arbiter.acquire()
-    arbiter.set_mode("image")
+    arbiter.set_mode("compute")
     assert host.active is False
-    assert "görsel" in arbiter.acquire()
+    assert "Compute" in arbiter.acquire()
 
 
 def test_mode_survives_a_restart(arbiter, host, tmp_path, clock):
-    arbiter.set_mode("image")
-    assert Arbiter(host, tmp_path / "gpu-mode", clock).mode == "image"
+    arbiter.set_mode("compute")
+    assert Arbiter(host, tmp_path / "gpu-mode", clock).mode == "compute"
+
+
+@pytest.mark.parametrize(("old", "new"), [("auto", "assistant"), ("image", "compute")])
+def test_the_old_mode_names_still_mean_the_same(arbiter, host, tmp_path, clock, old, new):
+    (tmp_path / "gpu-mode").write_text(old)
+    assert Arbiter(host, tmp_path / "gpu-mode", clock).mode == new
+    arbiter.set_mode(old)
+    assert arbiter.mode == new
+    assert (tmp_path / "gpu-mode").read_text() == new
 
 
 def test_unknown_mode_is_refused(arbiter):
@@ -476,7 +485,7 @@ def test_http_acquire_returns_the_model_address(http):
 def test_http_mode_rejects_bad_input(http):
     assert httpx.post(f"{http}/mode", json={"mode": "x"}).status_code == 400
     assert httpx.post(f"{http}/mode", content=b"not json").status_code == 400
-    assert httpx.post(f"{http}/mode", json={"mode": "image"}).json() == {"mode": "image"}
+    assert httpx.post(f"{http}/mode", json={"mode": "compute"}).json() == {"mode": "compute"}
 
 
 def test_http_unknown_path_is_404(http):
@@ -633,22 +642,49 @@ def test_busy_image_app_stops_a_gpu_job_but_not_a_cpu_job(arbiter, host):
     assert GPU_UNIT in host.stopped_jobs and CPU_UNIT not in host.stopped_jobs
 
 
-def test_gpu_job_waits_for_image_app_and_image_mode(arbiter, host):
+def test_gpu_job_waits_for_the_image_app(arbiter, host):
     host.image_app_state = ImageApp(reachable=True, hooked=True, busy=True)
     arbiter.submit("render", "işle", True, False)
     arbiter.tick()
     assert host.started_jobs == []
-    host.image_app_state = ImageApp(reachable=True, hooked=True)
-    arbiter.set_mode("image")
-    arbiter.tick()
-    assert host.started_jobs == [] and arbiter.mode == "image"
 
 
-def test_image_mode_stops_a_running_job_and_finishing_does_not_change_the_mode(arbiter, host):
+def test_compute_mode_runs_gpu_jobs_and_the_model_stays_off_afterwards(arbiter, host, clock):
+    arbiter.set_mode("compute")
     arbiter.submit("render", "işle", True, False)
     arbiter.tick()
-    arbiter.set_mode("image")
-    assert GPU_UNIT in host.stopped_jobs and arbiter.mode == "image"
+    assert host.started_jobs == [GPU_UNIT]
+    host.job_states[GPU_UNIT] = "inactive"
+    clock.now += 10
+    arbiter.tick()
+    arbiter.tick()
+    assert arbiter.job("render").status == "done" and host.active is False and arbiter.mode == "compute"
+
+
+def test_switching_to_compute_leaves_a_running_job_alone(arbiter, host):
+    arbiter.submit("render", "işle", True, False)
+    arbiter.tick()
+    arbiter.set_mode("compute")
+    arbiter.tick()
+    assert GPU_UNIT not in host.stopped_jobs and arbiter.job("render").status == "running"
+
+
+def test_the_image_app_still_comes_first_in_compute_mode(arbiter, host):
+    arbiter.set_mode("compute")
+    arbiter.submit("render", "işle", True, False)
+    arbiter.tick()
+    host.image_app_state = ImageApp(reachable=True, hooked=True, busy=True)
+    arbiter.tick()
+    assert GPU_UNIT in host.stopped_jobs and arbiter.job("render").status == "queued"
+
+
+def test_going_back_to_assistant_brings_the_model_back(arbiter, host):
+    arbiter.set_mode("compute")
+    arbiter.tick()
+    assert host.active is False
+    arbiter.set_mode("assistant")
+    arbiter.tick()
+    assert host.active is True
 
 
 def test_only_one_gpu_job_at_a_time(arbiter, host):
@@ -678,12 +714,12 @@ def test_priority_puts_the_student_first_and_jobs_resume_after(arbiter, host, cl
     assert host.started_jobs == [GPU_UNIT]
 
 
-def test_priority_can_be_ended_early_and_is_refused_in_image_mode(arbiter, host):
+def test_priority_can_be_ended_early_and_is_refused_in_compute_mode(arbiter, host):
     arbiter.set_priority(True)
     arbiter.set_priority(False)
     assert arbiter.state()["prioritySeconds"] == 0
-    arbiter.set_mode("image")
-    with pytest.raises(ValueError, match="Otomatik"):
+    arbiter.set_mode("compute")
+    with pytest.raises(ValueError, match="AI-Asistan"):
         arbiter.set_priority(True)
 
 

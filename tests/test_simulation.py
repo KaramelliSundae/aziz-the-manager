@@ -2,7 +2,7 @@
 
 After every round, on a machine without active faults:
   - at most one GPU job runs, and never beside the model
-  - while the image app works, or in image mode, neither a GPU job nor the model holds the GPU
+  - while the image app works, neither a GPU job nor the model holds the GPU
 Once the chaos ends, however it went:
   - every job reaches an end, nothing keeps waiting for ever, and the model is back
 """
@@ -153,9 +153,8 @@ def check_rules(machine, aziz, seed, step):
     if machine.image_app_busy:
         assert not gpu_jobs, f"GPU job beside the image app, {where}"
         assert not machine.model, f"model beside the image app, {where}"
-    if aziz.mode == "image":
-        assert not gpu_jobs, f"GPU job in image mode, {where}"
-        assert not machine.model, f"model in image mode, {where}"
+    if aziz.mode == "compute":
+        assert not machine.model, f"model in compute mode, {where}"
     names = [job.id for job in aziz.jobs if job.status in ("queued", "running")]
     assert len(names) == len(set(names)), f"a job listed twice, {where}"
 
@@ -229,7 +228,7 @@ def live(seed, tmp_path, monkeypatch, steps):
         (lambda: submit(True), 6), (lambda: submit(False), 3), (cancel, 2), (lambda: priority(True), 1),
         (lambda: priority(False), 1), (preempt, 2),
         (lambda: (setattr(machine, "image_app_busy", False), setattr(machine, "image_app_hangs", False)), 4), (image_app_hang, 1),
-        (question, 4), (lambda: mode("image"), 1), (lambda: mode("auto"), 3), (restart, 1), (reboot, 0.3),
+        (question, 4), (lambda: mode("compute"), 1), (lambda: mode("assistant"), 3), (restart, 1), (reboot, 0.3),
         (lambda: setattr(machine, "ram", rng.choice((1.5, 2.5, 3.5, 6.0, 17.0, 17.0, 17.0))), 2),
         (lambda: setattr(machine, "faults", rng.random() < 0.3), 1),
         (lambda: image_app_goes(rng.random() < 0.8), 1),
@@ -254,7 +253,7 @@ def live(seed, tmp_path, monkeypatch, steps):
     machine.image_app_hangs = False
     machine.ram = 17.0
     machine.foreign_program = 0
-    aziz.set_mode("auto")
+    aziz.set_mode("assistant")
     aziz.set_priority(False)
     machine.fault_rounds_ago = 99
     for _ in range(2000):

@@ -22,8 +22,8 @@ randomized simulation. Real runs used temporary test jobs, and `/preempt` was ca
 | 8 | You tap **Kamil'i öne al** during a GPU job | App asks first. Job stops and goes back in the queue; Kamil loads; jobs wait 30 minutes | real |
 | 9 | You end priority early | The job runs again | real |
 | 10 | Question during a GPU job | Told it is busy (or uses Gemini). Aziz notes it, so Kamil comes straight back afterwards, even if more work was expected | simulated |
-| 11 | You switch to image mode during a job | Job stops, priority ends, mode stays until you change it | simulated |
-| 12 | Priority while in image mode | Refused, with the reason | simulated |
+| 11 | You switch to Compute during a job | Job keeps running, priority ends, Kamil stays off until you switch back | simulated |
+| 12 | Priority while in Compute | Refused, with the reason | simulated |
 
 ## The image app
 

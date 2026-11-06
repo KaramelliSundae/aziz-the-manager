@@ -20,13 +20,15 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .host import FREE_SECONDS, Host
+from .host import FREE_SECONDS, IMAGE_APP_NAME, Host
 from .journal import Journal
 from .stats import DayStats
 
 log = logging.getLogger(__name__)
 
-MODES = ("auto", "image")
+MODES = ("assistant", "compute")
+# What the modes used to be called: a file saved back then, or an app not yet updated, still means the same.
+OLD_MODE_NAMES = {"auto": "assistant", "image": "compute"}
 # After the model was stopped for low RAM it does not start itself again for this long, so it cannot flap.
 # A question from the phone still starts it at once.
 RAM_BACKOFF_SECONDS = 15 * 60
@@ -100,6 +102,7 @@ class Aziz:
         self.keep_off_until = 0.0
         self.priority_until = 0.0
         self.claim: str | None = None  # the GPU job the model is being stopped for
+        self.stop_owed = False  # the image app asked and a GPU job's stop failed: it is owed even if the app goes silent
         self.claim_since = 0.0
         self.answer_wait_since: float | None = None
         self.last_question = -QUESTION_QUIET_SECONDS
@@ -110,7 +113,8 @@ class Aziz:
         self._start_lock = threading.Lock()  # a preempt must never slip between "may it start?" and starting it
         self._jobs_lock = threading.Lock()  # data only, never held across a host call
         saved = state_file.read_text().strip() if state_file.exists() else ""
-        self.mode = saved if saved in MODES else "auto"
+        saved = OLD_MODE_NAMES.get(saved, saved)
+        self.mode = saved if saved in MODES else "assistant"
         self.jobs_file = state_file.parent / "jobs.json"
         self.started: dict[str, float] = {}
         self.jobs: list[Job] = self._load_jobs()
@@ -120,8 +124,8 @@ class Aziz:
 
     def blocked_reason(self) -> str | None:
         """Why the model may not run now. Asked in the same order for starting and for staying on."""
-        if self.mode == "image":
-            return "GPU görsel üretim moduna ayrıldı"
+        if self.mode == "compute":
+            return "GPU Compute modunda"
         if self.clock() < self.held_until:
             return "görsel uygulaması GPU'yu istedi"
         if self.gpu_reserved():
@@ -144,6 +148,8 @@ class Aziz:
         return None
 
     def set_mode(self, mode: str) -> None:
+        """Compute keeps the model off until the mode changes. Work keeps its place: only the model moves."""
+        mode = OLD_MODE_NAMES.get(mode, mode)
         if mode not in MODES:
             raise ValueError(mode)
         with self._lock:
@@ -152,11 +158,10 @@ class Aziz:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             self.state_file.write_text(mode)
         if changed:
-            self.journal.add("mode", "GPU görsel üretime ayrıldı" if mode == "image" else "GPU otomatiğe alındı")
-        if mode == "image":
+            self.journal.add("mode", "GPU işlere ayrıldı: Compute" if mode == "compute" else "GPU Kamil'e döndü: AI-Asistan")
+        if mode == "compute":
             self.priority_until = 0.0  # the student's latest word
-            self._interrupt_gpu_jobs("GPU görsel üretim moduna alındı")
-            self.stop("GPU görsel üretime ayrıldı")
+            self.stop("Compute moduna alındı")
 
     def acquire(self) -> str | None:
         """Makes the model ready. Returns None when it is, otherwise the reason it cannot run."""
@@ -200,8 +205,10 @@ class Aziz:
         started = self.clock()
         deadline = started + FREE_SECONDS
         interrupted = False
+        self.stop_owed = True
         try:
             interrupted = self._interrupt_gpu_jobs("görsel uygulaması GPU'yu istedi")
+            self.stop_owed = any(job.gpu for job in self._with_status("running"))
         except Exception:  # noqa: BLE001 - the model must still leave
             log.exception("preempt: could not stop the GPU job")
         try:
@@ -363,8 +370,8 @@ class Aziz:
                 self.journal.add("priority", "Kamil'in önceliği bitirildi")
             self.priority_until = 0.0
             return
-        if self.mode == "image":
-            raise ValueError("GPU görsel üretim modunda, önce Otomatik'e al")
+        if self.mode == "compute":
+            raise ValueError("GPU Compute modunda, önce AI-Asistan'a al")
         self.priority_until = self.clock() + PRIORITY_SECONDS
         self.keep_off_until = self.ram_backoff_until = self.next_start = 0.0
         self.question_during_job = False
@@ -490,8 +497,6 @@ class Aziz:
     def _gpu_job_waits(self) -> str | None:
         if self.priority_active():
             return "Kamil öne alındı"
-        if self.mode == "image":
-            return "GPU görsel üretim modunda"
         if self.clock() < self.held_until:
             return "görsel uygulaması GPU'yu istedi"
         image_app = self.host.image_app()
@@ -557,10 +562,9 @@ class Aziz:
             self.claim = None
             return
         # Every round, not once: a job whose stop failed is stopped again until it goes.
-        if self.host.image_app().busy or self.clock() < self.held_until:
+        if self.host.image_app().busy or self.clock() < self.held_until or self.stop_owed:
             self._interrupt_gpu_jobs("görsel uygulaması GPU'yu istedi")
-        elif self.mode == "image":
-            self._interrupt_gpu_jobs("GPU görsel üretim moduna alındı")
+            self.stop_owed = any(job.gpu for job in self._with_status("running"))
         elif self.priority_active():
             self._interrupt_gpu_jobs("Kamil öne alındı")
         self._guard_memory()
@@ -610,4 +614,5 @@ class Aziz:
             "system": system,
             "log": self.journal.recent(LOG_IN_STATE),
             "kamilToday": self.stats.snapshot(),
+            "imageAppName": IMAGE_APP_NAME or None,
         }

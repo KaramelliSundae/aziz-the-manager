@@ -89,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.aziz.set_mode(self._body().get("mode", ""))
             except ValueError:
-                self._reply(400, {"error": "mode must be auto or image"})
+                self._reply(400, {"error": "mode must be assistant or compute"})
                 return
             self._reply(200, {"mode": self.aziz.mode})
         elif self.path == "/jobs":

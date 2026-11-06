@@ -11,6 +11,7 @@ import pytest
 
 from aziz.host import ImageApp
 from aziz.manager import (
+    HOLD_SECONDS,
     ANSWER_WAIT_SECONDS,
     CLAIM_SECONDS,
     DEFAULT_GPU_JOB_SECONDS,
@@ -190,9 +191,23 @@ def test_a_stop_that_failed_is_tried_again_every_round(aziz, host):
     aziz.tick()
     working_stop = host.stop_job
     host.stop_job = raises(BROKEN)
-    aziz.set_mode("image")
+    aziz.preempt()
     assert aziz.job("render").status == "running"
     host.stop_job = working_stop
+    aziz.tick()
+    assert GPU_UNIT in host.stopped_jobs and aziz.job("render").status == "queued"
+
+
+def test_a_failed_stop_is_still_owed_after_the_hold_when_the_image_app_goes_silent(aziz, host, clock):
+    aziz.submit("render", "işle", True, False)
+    aziz.tick()
+    working_stop = host.stop_job
+    host.stop_job = raises(BROKEN)
+    aziz.preempt()
+    assert aziz.job("render").status == "running"
+    host.stop_job = working_stop
+    host.image_app_state = ImageApp(reachable=False, running=True)
+    clock.now += HOLD_SECONDS + 1
     aziz.tick()
     assert GPU_UNIT in host.stopped_jobs and aziz.job("render").status == "queued"
 
@@ -297,19 +312,19 @@ def test_a_foreign_gpu_program_does_not_get_the_model_stopped_for_a_job(aziz, ho
     assert "başka" in aziz.job("render").note
 
 
-def test_image_mode_is_the_students_latest_word_over_priority(aziz, host):
+def test_compute_mode_is_the_students_latest_word_over_priority(aziz, host):
     aziz.set_priority(True)
-    aziz.set_mode("image")
+    aziz.set_mode("compute")
     assert aziz.state()["prioritySeconds"] == 0
 
 
-def test_priority_pauses_cpu_jobs_and_image_mode_does_not(aziz, host):
+def test_priority_pauses_cpu_jobs_and_compute_mode_does_not(aziz, host):
     aziz.set_priority(True)
     aziz.submit("build", "derleme", False, False)
     aziz.tick()
     assert host.started_jobs == [] and "öne" in aziz.job("build").note
     aziz.set_priority(False)
-    aziz.set_mode("image")
+    aziz.set_mode("compute")
     aziz.tick()
     assert host.started_jobs == [CPU_UNIT]
 
@@ -382,7 +397,7 @@ def test_a_damaged_jobs_file_starts_clean(host, tmp_path, clock, content):
 
 def test_a_full_disk_costs_only_the_saved_copy(aziz, host, monkeypatch):
     aziz.jobs_file = aziz.jobs_file.parent / "gpu-mode" / "not-a-folder" / "jobs.json"
-    aziz.state_file.write_text("auto")
+    aziz.state_file.write_text("assistant")
     aziz.submit("render", "işle", True, False)
     aziz.tick()
     assert aziz.job("render").status == "running"

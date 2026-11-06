@@ -196,5 +196,5 @@ def test_low_disk_refuses_a_sync(monkeypatch):
 
 
 def test_state_gives_only_what_is_needed(monkeypatch):
-    monkeypatch.setattr(gate, "aziz", lambda method, path, body=None: (200, {"mode": "auto", "imageAppReachable": True, "gateMissing": False, "log": []}))
+    monkeypatch.setattr(gate, "aziz", lambda method, path, body=None: (200, {"mode": "assistant", "imageAppReachable": True, "gateMissing": False, "log": []}))
     assert set(run("state")) >= {"mode"} and "log" not in run("state") and "imageAppReachable" not in run("state")

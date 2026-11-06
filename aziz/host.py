@@ -17,6 +17,8 @@ LLM_URL = "http://127.0.0.1:8422"
 IMAGE_APP_HEALTH = os.environ.get("AZIZ_IMAGE_APP_HEALTH", "http://127.0.0.1:8000/v1/health")
 LLM_UNIT = "ai-ders-llm.service"
 IMAGE_APP_UNIT = os.environ.get("AZIZ_IMAGE_APP_UNIT", "image-app.service")
+# What to call it in what the phone shows. Empty leaves the wording to the app.
+IMAGE_APP_NAME = os.environ.get("AZIZ_IMAGE_APP_NAME", "")
 FREE_SECONDS = 15.0  # the image app waits 20 s for a preempt
 
 # Calls to these local services must never go through a proxy.
