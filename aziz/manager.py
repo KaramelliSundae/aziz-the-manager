@@ -8,9 +8,9 @@ question). Compute is everything else that wants the machine, and it comes in tw
   - a server stays up until someone says stop, however long that is. The model waits on disk for as long as it is up, and
     comes back once it is gone. Nothing here stops a server unasked: not priority, not low memory, not the image app.
 
-The image app is a server whose unit this machine names, and being up is what counts, busy or not. Choosing Compute opens it;
-choosing AI-Asistan closes it and any GPU server, once confirmed. Its unit is the truth: if someone starts it by hand, it is
-treated just the same. If anything goes wrong in job handling, the model logic still runs,
+The image app is a server whose unit this machine names, and being up is what counts, busy or not. Aziz runs it, but he opens it
+only when told to, never by himself: not for Compute, which is for offload work, and not after a reboot. Choosing AI-Asistan closes
+it and any GPU server, once confirmed. Its unit is the truth: if someone starts it by hand, it is treated just the same. If anything goes wrong in job handling, the model logic still runs,
 so a broken job can never keep the model off.
 
 What is deliberately not saved: the wait for more GPU work, priority, and the claim. A crash or a reboot must
@@ -132,7 +132,6 @@ class Aziz:
         self.question_during_job = False
         self.waking_since: float | None = None
         self.server_seen: bool | None = None
-        self.reopen_after_reboot = False
         self.journal = Journal(state_file.parent / "journal.jsonl")
         self._lock = threading.Lock()
         self._start_lock = threading.Lock()  # a preempt must never slip between "may it start?" and starting it
@@ -143,7 +142,6 @@ class Aziz:
         self.jobs_file = state_file.parent / "jobs.json"
         self.started: dict[str, float] = {}
         self.jobs: list[Job] = self._load_jobs()
-        self._note_boot()
         self.journal.add("aziz", "Aziz göreve başladı")
 
     # The model
@@ -170,23 +168,12 @@ class Aziz:
             return "GPU belleği dolu"
         return None
 
-    def _note_boot(self) -> None:
-        """Compute means the server is up until someone says otherwise, and a reboot is not someone saying so."""
-        boot = self._boot_id()
-        path = self.state_file.parent / "boot"
-        try:
-            self.reopen_after_reboot = self.mode == "compute" and path.exists() and path.read_text() != boot
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(boot)
-        except OSError as error:
-            log.warning("could not keep the boot id: %s", error)
-
     def _gpu_servers(self) -> list[Job]:
         return [job for job in self._with_status("queued", "running") if job.server and job.gpu]
 
     def set_mode(self, mode: str, confirm: bool = False) -> None:
-        """One switch. Compute opens the server and keeps the model off. AI-Asistan closes whatever server holds the GPU, so
-        with one up it takes `confirm`. Other work keeps its place."""
+        """One switch. Compute keeps the model off for offload work and opens nothing. AI-Asistan closes whatever server holds
+        the GPU, so with one up it takes `confirm`. Other work keeps its place."""
         mode = OLD_MODE_NAMES.get(mode, mode)
         if mode not in MODES:
             raise ValueError(mode)
@@ -210,15 +197,9 @@ class Aziz:
         if mode == "compute":
             self.priority_until = 0.0  # the student's latest word
             self.stop("Compute moduna alındı")
-            try:
-                if self.host.image_app_known():
-                    self.set_server(True)
-            except HOST_ERRORS as error:  # Compute still stands: the model stays off and the problem is written down
-                log.warning("could not open the server: %s", error)
-                self.journal.add("problem", f"{server_name()} sunucusu açılamadı")
 
     def set_server(self, on: bool, force: bool = False) -> None:
-        """Only here, and by hand, does the image app start or stop. Stopping it while it works takes `force`."""
+        """Someone told Aziz to open or close the image app: nothing in here decides that alone. Stopping it while it works takes `force`."""
         name = server_name()
         if not self.host.image_app_known():
             raise ValueError("bu makinede sunucu tanımlı değil")
@@ -244,7 +225,7 @@ class Aziz:
         self.server_seen = False
         # What was held back for it no longer stands. The low RAM was most likely its own.
         self.held_until = self.keep_off_until = self.ram_backoff_until = self.next_start = 0.0
-        self.journal.add("server", f"{name} sunucusu kapatıldı, Kamil dönüyor")
+        self.journal.add("server", f"{name} sunucusu kapatıldı" + (", Kamil dönüyor" if self.mode == "assistant" else ""))
 
     def _watch_server(self) -> None:
         """Anyone may start or stop the unit by hand, and it may crash. Say so, and take back the memory it held."""
@@ -317,13 +298,6 @@ class Aziz:
 
     def tick(self) -> None:
         """One watch round. Job handling comes first and cannot stop the rest: the model's own rules always run."""
-        if self.reopen_after_reboot:
-            self.reopen_after_reboot = False
-            try:
-                if self.host.image_app_known():
-                    self.set_server(True)
-            except (*HOST_ERRORS, RuntimeError) as error:
-                log.warning("could not open the server after a reboot: %s", error)
         try:
             self._manage_jobs()
         except Exception:  # noqa: BLE001 - whatever a job did, the model logic below still runs

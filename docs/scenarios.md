@@ -29,7 +29,8 @@ randomized simulation. Real runs used temporary test jobs, and `/preempt` was ca
 
 | # | What happens | What Aziz does | Tested |
 |---|---|---|---|
-| S1 | You choose Compute | Any GPU job goes back in the queue, Kamil goes to disk, the image app starts | simulated |
+| S1 | You choose Compute | Kamil goes to disk, jobs keep running, the image app stays closed | simulated |
+| S1b | You tell Aziz to open the image app | Any GPU job goes back in the queue, Kamil goes to disk, the image app starts | simulated |
 | S2 | It sits idle for days | Stays up. Kamil stays on disk | simulated |
 | S3 | A question while it is up | Told why, and it stays up | simulated |
 | S4 | Priority while it is up | Refused, with the reason | simulated |
@@ -39,7 +40,7 @@ randomized simulation. Real runs used temporary test jobs, and `/preempt` was ca
 | S8 | Offload sends a server | Runs with no time limit. GPU server: Kamil on disk until it is stopped. CPU server: Kamil stays | simulated |
 | S9 | Low memory or the image app's preempt during an offload server | The server is left alone. Only a stop ends it | simulated |
 | S10 | A GPU job arrives during a GPU server | Waits, with the reason as its note | simulated |
-| S11 | Reboot | An offload server starts again. The image app opens again only in Compute | simulated |
+| S11 | Reboot | An offload server starts again. The image app stays on disk in either mode | simulated |
 
 ## The image app
 

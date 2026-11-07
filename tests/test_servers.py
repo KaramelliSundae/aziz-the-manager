@@ -155,14 +155,29 @@ def test_a_gpu_job_runs_beside_it_while_it_is_idle(aziz, host):
     assert host.started_jobs == [GPU_JOB]
 
 
-def test_choosing_compute_opens_it_and_saves_the_choice(aziz, host, tmp_path):
+def test_choosing_compute_opens_nothing_and_saves_the_choice(aziz, host, tmp_path):
     aziz.tick()
     aziz.set_mode("compute")
-    assert host.image_app_starts == 1 and host.active is False and (tmp_path / "gpu-mode").read_text() == "compute"
+    assert host.image_app_starts == 0 and host.active is False and (tmp_path / "gpu-mode").read_text() == "compute"
+    assert aziz.state()["server"]["up"] is False
+
+
+def test_jobs_run_in_compute_with_it_closed(aziz, host):
+    aziz.set_mode("compute")
+    aziz.submit("render", "işle", True, False)
+    aziz.tick()
+    assert host.started_jobs == [GPU_JOB] and host.image_app_starts == 0
+
+
+def test_told_to_open_it_in_compute_it_opens(aziz, host):
+    aziz.set_mode("compute")
+    aziz.set_server(True)
+    assert host.image_app_starts == 1 and aziz.mode == "compute"
 
 
 def test_choosing_kamil_with_it_up_needs_a_second_word(aziz, host):
     aziz.set_mode("compute")
+    aziz.set_server(True)
     with pytest.raises(NeedsConfirm, match="onayla"):
         aziz.set_mode("assistant")
     assert host.image_app_stops == 0 and aziz.mode == "compute"
@@ -201,32 +216,11 @@ def test_a_machine_with_no_server_keeps_plain_compute(aziz, host):
     assert host.image_app_starts == 0 and aziz.mode == "compute"
 
 
-def test_if_it_will_not_open_compute_still_stands_and_says_so(aziz, host):
-    def fails():
-        raise OSError("no")
-
-    host.start_image_app = fails
-    aziz.set_mode("compute")
-    assert aziz.mode == "compute" and any("açılamadı" in entry["text"] for entry in aziz.journal.recent(5))
-
-
-def test_compute_reopens_it_after_a_reboot_but_not_after_a_restart(host, clock, tmp_path):
-    aziz = Aziz(host, tmp_path / "gpu-mode", clock)
-    aziz.set_mode("compute")
-    host.image_app_state = OFF
-    again = Aziz(host, tmp_path / "gpu-mode", clock)  # the service restarted, and someone closed it by hand
-    again.tick()
-    assert host.image_app_starts == 1
-    host.boot_id = lambda: "another"
-    rebooted = Aziz(host, tmp_path / "gpu-mode", clock)
-    rebooted.tick()
-    assert host.image_app_starts == 2
-
-
-def test_after_a_reboot_in_ai_asistan_it_stays_on_disk(host, clock, tmp_path):
-    Aziz(host, tmp_path / "gpu-mode", clock)
-    host.boot_id = lambda: "another"
-    Aziz(host, tmp_path / "gpu-mode", clock).tick()
+def test_a_reboot_opens_nothing_in_either_mode(host, clock, tmp_path):
+    for mode in ("compute", "assistant"):
+        Aziz(host, tmp_path / "gpu-mode", clock).set_mode(mode)
+        host.boot_id = lambda: f"after {mode}"
+        Aziz(host, tmp_path / "gpu-mode", clock).tick()
     assert host.image_app_starts == 0
 
 
@@ -372,12 +366,34 @@ def http(aziz):
 
 def test_http_the_switch_takes_a_second_word(http, host):
     assert httpx.post(f"{http}/mode", json={"mode": "compute"}, timeout=5).json() == {"mode": "compute"}
-    assert host.image_app_starts == 1
+    assert host.image_app_starts == 0
+    answer = httpx.post(f"{http}/server", json={"on": True}, timeout=5)
+    assert answer.status_code == 200 and answer.json()["up"] is True and host.image_app_starts == 1
     refused = httpx.post(f"{http}/mode", json={"mode": "assistant"}, timeout=5)
     assert refused.status_code == 409 and refused.json()["needsConfirm"] is True and "onayla" in refused.json()["reason"]
     assert httpx.post(f"{http}/mode", json={"mode": "assistant", "confirm": True}, timeout=5).json() == {"mode": "assistant"}
     assert host.image_app_stops == 1
     assert httpx.post(f"{http}/mode", json={"mode": "x"}, timeout=5).status_code == 400
+
+
+def test_http_it_opens_only_when_told_and_a_bad_word_changes_nothing(http, host):
+    assert httpx.post(f"{http}/server", json={"on": False}, timeout=5).status_code == 200
+    assert host.image_app_starts == 0
+    host.image_app_state = IDLE
+    for body in ({}, {"on": "true"}, {"on": 1}, {"on": None}):
+        assert httpx.post(f"{http}/server", json=body, timeout=5).status_code == 409
+    assert host.image_app_starts == 0 and host.image_app_stops == 0
+    host.image_app_state = OFF
+    host.image_app_is_known = False
+    assert httpx.post(f"{http}/server", json={"on": True}, timeout=5).status_code == 409
+
+
+def test_http_closing_it_mid_work_takes_force(http, host):
+    host.image_app_state = WORKING
+    assert httpx.post(f"{http}/server", json={"on": False}, timeout=5).status_code == 409
+    assert host.image_app_stops == 0
+    assert httpx.post(f"{http}/server", json={"on": False, "force": True}, timeout=5).status_code == 200
+    assert host.image_app_stops == 1
 
 
 def test_http_jobs_route_takes_a_server(http):

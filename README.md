@@ -39,12 +39,13 @@ Compute work comes in two kinds:
 One switch does it all: `POST /mode`, the app's Settings, or `ai-ders mode`. A machine can name one server of its own in `/etc/aziz/env`,
 called the image app in this repository, and it stays on disk until wanted:
 
-- **Choosing Compute** puts Kamil on disk and opens the image app.
+- **Choosing Compute** puts Kamil on disk and keeps the machine free for offload work. It opens nothing.
+- **Telling Aziz** with `POST /server` is the only way he opens the image app. Kamil goes to disk first, and it stays up until told to stop.
 - **Choosing AI-Asistan** closes the image app and any GPU server, and Kamil comes back. With one of them up it needs a second word,
   `{"mode": "assistant", "confirm": true}`, which the app asks for. CPU servers stay.
 
-While a server holds the GPU, `/state` reads `compute`. A reboot in Compute opens the image app again; otherwise a reboot leaves it on
-disk, so keep its unit disabled. A real unit is the truth about it, so one started by hand counts all the same. The mode survives a
+While a server holds the GPU, `/state` reads `compute`. A reboot leaves the image app on disk in either mode, so keep its unit
+disabled. A real unit is the truth about it, so one started by hand counts all the same. The mode survives a
 restart. The old names, `auto` and `image`, still work.
 
 CPU work leaves Kamil alone. A GPU job may run beside an idle image app, steps aside when that app starts working, and goes back in the queue.
@@ -115,6 +116,7 @@ flowchart TD
 | `POST /priority` | `{on}`: Kamil first for 30 minutes. Refused in Compute mode and while a GPU server is up |
 | `GET /state`, `GET /log?limit=100` | Everything now; the logbook |
 | `POST /mode` | `{mode, confirm}`: the switch. A 409 with `needsConfirm` means a server is up and it takes `confirm: true` |
+| `POST /server` | `{on, force}`: open or close the image app. Nothing else opens it. Closing it mid-work takes `force: true` |
 | `POST /preempt`, `/acquire` | Used by the image app and the Kamil API |
 
 Job names are `[a-z0-9-]`, at most 63 characters. A job interrupted by the image app or priority starts again from the

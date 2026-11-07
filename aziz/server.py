@@ -96,6 +96,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(400, {"error": "mode must be assistant or compute"})
                 return
             self._reply(200, {"mode": self.aziz.mode})
+        elif self.path == "/server":
+            body = self._body()  # the only way to open the image app: someone has to say so
+            if not isinstance(body.get("on"), bool):
+                raise ValueError("on, true veya false olmalı")  # a mistyped word must not close it either
+            self.aziz.set_server(body["on"], body.get("force") is True)
+            self._reply(200, self.aziz.state()["server"])
         elif self.path == "/jobs":
             body = self._body()
             minutes = body.get("maxMinutes")
