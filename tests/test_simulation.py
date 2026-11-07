@@ -2,7 +2,8 @@
 
 After every round, on a machine without active faults:
   - at most one GPU job runs, and never beside the model
-  - while the image app works, neither a GPU job nor the model holds the GPU
+  - while the image app works, no GPU job holds the GPU beside it
+  - while a server is up, the model stays on disk, and nothing but a stop ends it
 Once the chaos ends, however it went:
   - every job reaches an end, nothing keeps waiting for ever, and the model is back
 """
@@ -20,8 +21,10 @@ from aziz import manager
 from aziz.host import ImageApp
 from aziz.manager import KEEP_OFF_SECONDS, PRIORITY_SECONDS, Aziz
 
-GPU_PREFIX = "offload-gpu-job@"
+GPU_PREFIX = "offload-gpu-"
+SERVER_MARK = "-server@"
 FAULT_MEMORY = 4  # rounds after a fault before the rules must hold again
+CANCELLING: set[str] = set()  # servers the simulation itself told to stop
 
 
 class Machine:
@@ -33,7 +36,8 @@ class Machine:
         self.model_since = 0.0
         self.model_vram_lingers = 0
         self.image_app_busy = False
-        self.image_app_up = True
+        self.image_app_up = False
+        self.servers_stopped: set[str] = set()
         self.image_app_hangs = False
         self.ram = 17.0
         self.faults = False
@@ -56,6 +60,17 @@ class Machine:
 
     def _gpu_jobs(self):
         return [u for u, (state, _) in self.units.items() if u.startswith(GPU_PREFIX) and state in ("active", "deactivating")]
+
+    def image_app_known(self):
+        return True
+
+    def start_image_app(self):
+        self._fault()
+        self.image_app_up = True
+
+    def stop_image_app(self):
+        self._fault()
+        self.image_app_up = self.image_app_busy = self.image_app_hangs = False
 
     def foreign_gpu_mib(self):
         self._fault()
@@ -92,10 +107,12 @@ class Machine:
 
     def start_job(self, unit):
         self._fault()
-        self.units[unit] = ["active", self.rng.choice((1, 30, 300, 900))]
+        self.units[unit] = ["active", 10**9 if SERVER_MARK in unit else self.rng.choice((1, 30, 300, 900))]
 
     def stop_job(self, unit):
         self._fault()
+        if SERVER_MARK in unit:
+            self.servers_stopped.add(unit)
         if unit in self.units and self.units[unit][0] == "active":
             self.units[unit] = ["deactivating", self.rng.choice((0, 2, 5))]
 
@@ -151,8 +168,14 @@ def check_rules(machine, aziz, seed, step):
     if gpu_jobs:
         assert not machine.model, f"model beside a GPU job, {where}"
     if machine.image_app_busy:
-        assert not gpu_jobs, f"GPU job beside the image app, {where}"
-        assert not machine.model, f"model beside the image app, {where}"
+        finite = [unit for unit in gpu_jobs if SERVER_MARK not in unit]
+        assert not finite, f"GPU job beside the image app, {where}"
+    if machine.image_app_up:
+        assert not machine.model, f"model beside the server, {where}"
+    if any(SERVER_MARK in unit for unit in gpu_jobs):
+        assert not machine.model, f"model beside a GPU server, {where}"
+    cancelled = {job.unit for job in aziz.jobs if job.server and job.status not in ("queued", "running")}
+    assert machine.servers_stopped <= cancelled | machine.servers_stopped & CANCELLING, f"a server stopped unasked, {where}"
     if aziz.mode == "compute":
         assert not machine.model, f"model in compute mode, {where}"
     names = [job.id for job in aziz.jobs if job.status in ("queued", "running")]
@@ -160,6 +183,7 @@ def check_rules(machine, aziz, seed, step):
 
 
 def live(seed, tmp_path, monkeypatch, steps):
+    CANCELLING.clear()
     rng = random.Random(seed)
     clock = Clock()
     machine = Machine(rng, clock)
@@ -175,11 +199,27 @@ def live(seed, tmp_path, monkeypatch, steps):
         except ValueError:
             pass
 
+    def submit_server(gpu):
+        nonlocal number
+        number += 1
+        try:
+            aziz.submit(f"s{number % 3}", "sunucu", gpu, False, server=True)
+        except ValueError:
+            pass
+
+    def server(on, force=False):
+        try:
+            aziz.set_server(on, force)
+        except (ValueError, subprocess.SubprocessError):
+            pass
+
     def cancel():
         jobs = [job.id for job in aziz.jobs]
         if jobs:
             try:
-                aziz.cancel(rng.choice(jobs))
+                chosen = rng.choice(jobs)
+                CANCELLING.add(next(job.unit for job in aziz.jobs if job.id == chosen))
+                aziz.cancel(chosen)
             except subprocess.SubprocessError:
                 pass
 
@@ -218,20 +258,24 @@ def live(seed, tmp_path, monkeypatch, steps):
         machine.image_app_busy = False
         aziz = Aziz(machine, tmp_path / "gpu-mode", clock)
 
-    def mode(which):
+    def mode(which, confirm=False):
         try:
-            aziz.set_mode(which)
-        except subprocess.SubprocessError:
+            if confirm:
+                CANCELLING.update(job.unit for job in aziz.jobs if job.server)
+            aziz.set_mode(which, confirm)
+        except (ValueError, subprocess.SubprocessError):
             pass
 
     actions = [
         (lambda: submit(True), 6), (lambda: submit(False), 3), (cancel, 2), (lambda: priority(True), 1),
         (lambda: priority(False), 1), (preempt, 2),
         (lambda: (setattr(machine, "image_app_busy", False), setattr(machine, "image_app_hangs", False)), 4), (image_app_hang, 1),
-        (question, 4), (lambda: mode("compute"), 1), (lambda: mode("assistant"), 3), (restart, 1), (reboot, 0.3),
+        (question, 4), (lambda: mode("compute"), 1), (lambda: mode("assistant"), 2), (lambda: mode("assistant", True), 2), (restart, 1), (reboot, 0.3),
         (lambda: setattr(machine, "ram", rng.choice((1.5, 2.5, 3.5, 6.0, 17.0, 17.0, 17.0))), 2),
         (lambda: setattr(machine, "faults", rng.random() < 0.3), 1),
-        (lambda: image_app_goes(rng.random() < 0.8), 1),
+        (lambda: image_app_goes(rng.random() < 0.3), 0.5),  # by hand, or a crash
+        (lambda: server(True), 1), (lambda: server(False), 1.5), (lambda: server(False, True), 1),
+        (lambda: submit_server(True), 0.5), (lambda: submit_server(False), 0.3),
         (lambda: setattr(machine, "foreign_program", rng.choice((0, 0, 0, 3000))), 1),
         (lambda: None, 10),
     ]
@@ -249,13 +293,18 @@ def live(seed, tmp_path, monkeypatch, steps):
     # The chaos ends. However it went, everything must settle.
     machine.faults = False
     machine.image_app_busy = False
-    machine.image_app_up = True
+    machine.image_app_up = False
     machine.image_app_hangs = False
     machine.ram = 17.0
     machine.foreign_program = 0
-    aziz.set_mode("assistant")
+    CANCELLING.update(job.unit for job in aziz.jobs if job.server)
+    aziz.set_mode("assistant", confirm=True)
     aziz.set_priority(False)
     machine.fault_rounds_ago = 99
+    for job in aziz._with_status("queued", "running"):
+        if job.server:  # a server ends only when told to, and the chaos is over
+            CANCELLING.add(job.unit)
+            aziz.cancel(job.id)
     for _ in range(2000):
         machine.advance(5)
         aziz.tick()

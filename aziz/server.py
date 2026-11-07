@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .host import SystemHost
-from .manager import Aziz
+from .manager import Aziz, NeedsConfirm
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,11 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(409, {"reason": reason}) if reason else self._reply(200, {"url": LLM_URL})
         elif self.path == "/mode":
             try:
-                self.aziz.set_mode(self._body().get("mode", ""))
+                body = self._body()
+                self.aziz.set_mode(body.get("mode", ""), body.get("confirm") is True)
+            except NeedsConfirm as refused:
+                self._reply(409, {"reason": str(refused), "needsConfirm": True})
+                return
             except ValueError:
                 self._reply(400, {"error": "mode must be assistant or compute"})
                 return
@@ -97,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
             minutes = body.get("maxMinutes")
             job = self.aziz.submit(
                 body.get("id"), str(body.get("label", "")), body.get("gpu") is True, body.get("nextGpu") == "likely",
-                body.get("restart") is not False, None if minutes is None else int(minutes),
+                body.get("restart") is not False, None if minutes is None else int(minutes), body.get("server") is True,
             )
             self._reply(200, asdict(job))
         elif self.path == "/forecast":

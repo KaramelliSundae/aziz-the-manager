@@ -35,21 +35,25 @@ OFFLOAD_EXTRA_HIDDEN='' OFFLOAD_TOOL_BINDS=''
 # shellcheck disable=SC1091
 [[ -f /etc/aziz/offload.env ]] && . /etc/aziz/offload.env
 export OFFLOAD_EXTRA_HIDDEN OFFLOAD_TOOL_BINDS
-render() { python3 - "$here/job.service.in" "$1" "$2" <<'PY'
+render() { python3 - "$here/job.service.in" "$1" "$2" "$3" <<'PY'
 import os
 import sys
-template, kind, devices = sys.argv[1:]
+template, kind, devices, limit = sys.argv[1:]
 binds = os.environ["OFFLOAD_TOOL_BINDS"]
-text = open(template).read().replace("@KIND@", kind).replace("@DEVICES@", devices)
+text = open(template).read().replace("@KIND@", kind).replace("@DEVICES@", devices).replace("@RUNTIME@", limit)
 text = text.replace("@EXTRA_HIDDEN@", os.environ["OFFLOAD_EXTRA_HIDDEN"])
 # A line of its own, and none at all without tools: an empty assignment would clear the binds before it.
 text = text.replace("@TOOL_BINDS@", f"BindReadOnlyPaths={binds}" if binds else "")
 print(text, end="")
 PY
 }
-render CPU "$no_devices" >/etc/systemd/system/offload-job@.service
-render GPU "$nvidia" >/etc/systemd/system/offload-gpu-job@.service
-chmod 644 /etc/systemd/system/offload-job@.service /etc/systemd/system/offload-gpu-job@.service
+render CPU "$no_devices" 1d >/etc/systemd/system/offload-job@.service
+render GPU "$nvidia" 1d >/etc/systemd/system/offload-gpu-job@.service
+# Servers: the same sandbox, but up until someone says stop.
+render "CPU server" "$no_devices" infinity >/etc/systemd/system/offload-server@.service
+render "GPU server" "$nvidia" infinity >/etc/systemd/system/offload-gpu-server@.service
+chmod 644 /etc/systemd/system/offload-job@.service /etc/systemd/system/offload-gpu-job@.service \
+  /etc/systemd/system/offload-server@.service /etc/systemd/system/offload-gpu-server@.service
 
 command -v restorecon >/dev/null && restorecon -R /home/offload /usr/local/libexec/offload-gate /usr/local/libexec/offload-run /etc/systemd/system/offload-job@.service /etc/systemd/system/offload-gpu-job@.service /var/lib/offload /opt/offload-tools
 systemctl daemon-reload

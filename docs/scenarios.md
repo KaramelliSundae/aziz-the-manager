@@ -25,15 +25,31 @@ randomized simulation. Real runs used temporary test jobs, and `/preempt` was ca
 | 11 | You switch to Compute during a job | Job keeps running, priority ends, Kamil stays off until you switch back | simulated |
 | 12 | Priority while in Compute | Refused, with the reason | simulated |
 
+## Servers
+
+| # | What happens | What Aziz does | Tested |
+|---|---|---|---|
+| S1 | You choose Compute | Any GPU job goes back in the queue, Kamil goes to disk, the image app starts | simulated |
+| S2 | It sits idle for days | Stays up. Kamil stays on disk | simulated |
+| S3 | A question while it is up | Told why, and it stays up | simulated |
+| S4 | Priority while it is up | Refused, with the reason | simulated |
+| S5 | You choose AI-Asistan with it up | Asks once more. Confirmed: it stops and Kamil comes back at once | simulated |
+| S6 | The same while it works, or with a GPU server up | Asks once more, and confirmed stops them too | simulated |
+| S7 | Someone starts or stops it by hand, or it crashes | Treated just the same, and written down | simulated |
+| S8 | Offload sends a server | Runs with no time limit. GPU server: Kamil on disk until it is stopped. CPU server: Kamil stays | simulated |
+| S9 | Low memory or the image app's preempt during an offload server | The server is left alone. Only a stop ends it | simulated |
+| S10 | A GPU job arrives during a GPU server | Waits, with the reason as its note | simulated |
+| S11 | Reboot | An offload server starts again. The image app opens again only in Compute | simulated |
+
 ## The image app
 
 | # | What happens | What Aziz does | Tested |
 |---|---|---|---|
 | 13 | The image app asks during a GPU job | Job stopped, memory free in 0.6 s (the image app allows 20) | real, by hand |
-| 14 | The image app asks during Kamil's answer | Kamil stops at once. The image app never waits for him | simulated |
+| 14 | The image app starts during Kamil's answer | Kamil stops at once. The image app never waits for him | simulated |
 | 15 | GPU job submitted while the image app works | Waits, with the reason as its note | simulated |
 | 16 | The image app's health check times out mid-job | Not taken for "off": jobs wait, and GPU memory is checked too | simulated |
-| 17 | The image app stopped | GPU counts as free; its hook preempts when it returns | simulated |
+| 17 | The image app stopped | GPU counts as free, Kamil comes back; its hook preempts when it returns | simulated |
 | 18 | Aziz is down | The image app goes ahead anyway; it never depends on him | by design, not run |
 
 ## Things going wrong

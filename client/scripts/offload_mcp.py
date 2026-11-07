@@ -21,6 +21,7 @@ TOOLS = [
         "restart": {"type": "boolean", "description": "False if rerunning from the start is not safe. Aziz restarts interrupted jobs otherwise."},
         "max_minutes": {"type": "integer", "description": "Time limit. Defaults: 4 hours GPU, 12 hours CPU."},
         "label": {"type": "string", "description": "Short name shown in the owner's app."},
+        "server": {"type": "boolean", "description": "True for something that stays up, such as an API. It runs until offload_cancel or the owner stops it, with no time limit. With gpu, Kamil's local model stays offline all that time."},
         "project_dir": PROJECT}}},
     {"name": "offload_job", "description": "A job's status. `note` says why it is waiting or stopped.",
      "inputSchema": {"type": "object", "required": ["job"], "properties": {"job": {"type": "string"}}}},
@@ -28,7 +29,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["job"], "properties": {"job": {"type": "string"}, "seconds": {"type": "integer"}}}},
     {"name": "offload_logs", "description": "The end of a job's output.",
      "inputSchema": {"type": "object", "required": ["job"], "properties": {"job": {"type": "string"}, "lines": {"type": "integer"}}}},
-    {"name": "offload_cancel", "description": "Stop a job.",
+    {"name": "offload_cancel", "description": "Stop a job or a server.",
      "inputSchema": {"type": "object", "required": ["job"], "properties": {"job": {"type": "string"}}}},
     {"name": "offload_forecast", "description": "Update the guess about more GPU work. Send unlikely when GPU work is finished, so Kamil returns at once.",
      "inputSchema": {"type": "object", "required": ["next_gpu"], "properties": {"next_gpu": {"type": "string", "enum": ["likely", "unlikely"]}}}},
@@ -45,7 +46,7 @@ def tool(name: str, args: dict) -> object:
     if name == "offload_run":
         root = offload.git_root(args.get("project_dir"))
         return offload.run_job(root, args["command"], bool(args.get("gpu")), args.get("next_gpu", "unlikely"),
-                               args.get("restart", True), int(args.get("max_minutes") or 0), args.get("label", ""))
+                               args.get("restart", True), int(args.get("max_minutes") or 0), args.get("label", ""), bool(args.get("server")))
     if name == "offload_job":
         return offload.call(f"job {args['job']}")
     if name == "offload_wait":

@@ -1,8 +1,8 @@
-// Aziz may start and stop the local model and offload jobs, and nothing else.
+// Aziz may start and stop the local model and offload jobs and servers. The image app's unit is added on its own machine.
 polkit.addRule(function (action, subject) {
   if (action.id === "org.freedesktop.systemd1.manage-units" &&
       subject.user === "aziz" &&
-      /^(ai-ders-llm|offload-job@[a-z0-9-]+|offload-gpu-job@[a-z0-9-]+)\.service$/.test(action.lookup("unit")) &&
+      /^(ai-ders-llm|offload-(gpu-)?(job|server)@[a-z0-9-]+)\.service$/.test(action.lookup("unit")) &&
       (action.lookup("verb") === "start" || action.lookup("verb") === "stop")) {
     return polkit.Result.YES;
   }

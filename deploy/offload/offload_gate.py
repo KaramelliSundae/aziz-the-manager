@@ -131,13 +131,13 @@ def put(project: str, stdin) -> dict:
 
 
 def submit(args: list[str], stdin) -> dict:
-    """submit ID PROJECT cpu|gpu likely|unlikely restart|norestart MINUTES LABEL..., with the command on stdin."""
+    """submit ID PROJECT cpu|gpu likely|unlikely restart|norestart|server MINUTES LABEL..., with the command on stdin."""
     if len(args) < 6:
         raise Refused("bad submit")
     identity, project, kind, next_gpu, restart, minutes = args[:6]
     job_id(identity)
     project_dir(project)
-    if kind not in ("cpu", "gpu") or next_gpu not in ("likely", "unlikely") or restart not in ("restart", "norestart"):
+    if kind not in ("cpu", "gpu") or next_gpu not in ("likely", "unlikely") or restart not in ("restart", "norestart", "server"):
         raise Refused("bad submit")
     command = stdin.read(MAX_LOG_BYTES)
     if not command.strip():
@@ -153,7 +153,7 @@ def submit(args: list[str], stdin) -> dict:
     (queue / "log").write_text("")
     body = {
         "id": identity, "label": " ".join(args[6:]), "gpu": kind == "gpu", "nextGpu": next_gpu,
-        "restart": restart == "restart",
+        "restart": restart == "restart", "server": restart == "server",
     }
     if minutes != "0":
         body["maxMinutes"] = int(minutes) if minutes.isdigit() else 0

@@ -1,8 +1,17 @@
 """The decisions. Every rule that says who gets the GPU lives here, and nothing here talks to the machine directly.
 
-The model stays loaded, idle or not (1.5 W idle, measured; a cold start costs 20-30 s on the next question). It
-leaves only while something with a better claim needs the GPU, and it comes back by itself. If anything goes
-wrong in job handling, the model logic still runs, so a broken job can never keep the model off.
+Two modes. In AI-Asistan the model stays loaded, idle or not (1.5 W idle, measured; a cold start costs 20-30 s on the next
+question). Compute is everything else that wants the machine, and it comes in two kinds:
+
+  - a job is finite. The model goes to disk, the job runs, and the sender says whether more GPU work follows: if so the GPU
+    waits up to 20 minutes, if not the model comes back.
+  - a server stays up until someone says stop, however long that is. The model waits on disk for as long as it is up, and
+    comes back once it is gone. Nothing here stops a server unasked: not priority, not low memory, not the image app.
+
+The image app is a server whose unit this machine names, and being up is what counts, busy or not. Choosing Compute opens it;
+choosing AI-Asistan closes it and any GPU server, once confirmed. Its unit is the truth: if someone starts it by hand, it is
+treated just the same. If anything goes wrong in job handling, the model logic still runs,
+so a broken job can never keep the model off.
 
 What is deliberately not saved: the wait for more GPU work, priority, and the claim. A crash or a reboot must
 bring the model back, never strand it. Jobs are saved, and a job's systemd unit is the truth about it.
@@ -20,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .host import FREE_SECONDS, IMAGE_APP_NAME, Host
+from .host import FREE_SECONDS, IMAGE_APP_NAME, ImageApp, Host
 from .journal import Journal
 from .stats import DayStats
 
@@ -76,6 +85,7 @@ class Job:
     next_gpu_likely: bool = False
     restart: bool = True  # False: rerunning it is not safe, so an interrupted job waits for its sender
     max_seconds: int = 0
+    server: bool = False  # stays up until someone says stop, and has no time limit
     status: str = "queued"  # queued | running | done | failed | cancelled | interrupted
     note: str = ""
     restarts: int = 0
@@ -85,7 +95,20 @@ class Job:
 
     @property
     def unit(self) -> str:
-        return f"offload-gpu-job@{self.id}.service" if self.gpu else f"offload-job@{self.id}.service"
+        kind = "server" if self.server else "job"
+        return f"offload-gpu-{kind}@{self.id}.service" if self.gpu else f"offload-{kind}@{self.id}.service"
+
+
+class NeedsConfirm(ValueError):
+    """AI-Asistan would close a server that is up, so it takes a second word."""
+
+
+def server_up(image_app: ImageApp) -> bool:
+    return image_app.reachable or image_app.running
+
+
+def server_name() -> str:
+    return IMAGE_APP_NAME or "görsel uygulaması"
 
 
 class Aziz:
@@ -108,6 +131,8 @@ class Aziz:
         self.last_question = -QUESTION_QUIET_SECONDS
         self.question_during_job = False
         self.waking_since: float | None = None
+        self.server_seen: bool | None = None
+        self.reopen_after_reboot = False
         self.journal = Journal(state_file.parent / "journal.jsonl")
         self._lock = threading.Lock()
         self._start_lock = threading.Lock()  # a preempt must never slip between "may it start?" and starting it
@@ -118,6 +143,7 @@ class Aziz:
         self.jobs_file = state_file.parent / "jobs.json"
         self.started: dict[str, float] = {}
         self.jobs: list[Job] = self._load_jobs()
+        self._note_boot()
         self.journal.add("aziz", "Aziz göreve başladı")
 
     # The model
@@ -126,16 +152,13 @@ class Aziz:
         """Why the model may not run now. Asked in the same order for starting and for staying on."""
         if self.mode == "compute":
             return "GPU Compute modunda"
+        # A stopped image app leaves the GPU free. One that is up holds Compute until it is told to stop.
+        if server_up(self.host.image_app()):
+            return f"{server_name()} sunucusu açık"
         if self.clock() < self.held_until:
             return "görsel uygulaması GPU'yu istedi"
         if self.gpu_reserved():
             return "GPU hesaplama işine ayrıldı"
-        image_app = self.host.image_app()
-        # A stopped the image app leaves the GPU free, and its hook preempts when it starts again.
-        if image_app.reachable and not image_app.hooked:
-            return "görsel uygulamasında GPU kancası yok"
-        if image_app.busy:
-            return "görsel uygulaması çalışıyor"
         if self.host.foreign_gpu_mib() > FOREIGN_GPU_MIB:
             return "GPU'da başka bir süreç var"
         return None
@@ -147,11 +170,36 @@ class Aziz:
             return "GPU belleği dolu"
         return None
 
-    def set_mode(self, mode: str) -> None:
-        """Compute keeps the model off until the mode changes. Work keeps its place: only the model moves."""
+    def _note_boot(self) -> None:
+        """Compute means the server is up until someone says otherwise, and a reboot is not someone saying so."""
+        boot = self._boot_id()
+        path = self.state_file.parent / "boot"
+        try:
+            self.reopen_after_reboot = self.mode == "compute" and path.exists() and path.read_text() != boot
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(boot)
+        except OSError as error:
+            log.warning("could not keep the boot id: %s", error)
+
+    def _gpu_servers(self) -> list[Job]:
+        return [job for job in self._with_status("queued", "running") if job.server and job.gpu]
+
+    def set_mode(self, mode: str, confirm: bool = False) -> None:
+        """One switch. Compute opens the server and keeps the model off. AI-Asistan closes whatever server holds the GPU, so
+        with one up it takes `confirm`. Other work keeps its place."""
         mode = OLD_MODE_NAMES.get(mode, mode)
         if mode not in MODES:
             raise ValueError(mode)
+        if mode == "assistant":
+            image_app_up = server_up(self.host.image_app())
+            servers = self._gpu_servers()
+            if (image_app_up or servers) and not confirm:
+                names = ([server_name()] if image_app_up else []) + [job.label or job.id for job in servers]
+                raise NeedsConfirm(f"{', '.join(names)} sunucusu açık, kapatmak için onayla")
+            if image_app_up:
+                self.set_server(False, force=True)
+            for job in servers:
+                self.cancel(job.id)
         with self._lock:
             changed = mode != self.mode
             self.mode = mode
@@ -162,6 +210,50 @@ class Aziz:
         if mode == "compute":
             self.priority_until = 0.0  # the student's latest word
             self.stop("Compute moduna alındı")
+            try:
+                if self.host.image_app_known():
+                    self.set_server(True)
+            except HOST_ERRORS as error:  # Compute still stands: the model stays off and the problem is written down
+                log.warning("could not open the server: %s", error)
+                self.journal.add("problem", f"{server_name()} sunucusu açılamadı")
+
+    def set_server(self, on: bool, force: bool = False) -> None:
+        """Only here, and by hand, does the image app start or stop. Stopping it while it works takes `force`."""
+        name = server_name()
+        if not self.host.image_app_known():
+            raise ValueError("bu makinede sunucu tanımlı değil")
+        image_app = self.host.image_app()
+        if on:
+            if server_up(image_app):
+                return
+            with self._start_lock:
+                self.held_until = self.clock() + HOLD_SECONDS  # nothing takes the GPU before its load does
+            self.stop_owed = True
+            self._interrupt_gpu_jobs(f"{name} sunucusu açılıyor")
+            self.stop_owed = bool(self._stoppable_gpu_jobs())
+            self.stop(f"{name} sunucusu açılıyor")
+            self.host.start_image_app()
+            self.server_seen = True
+            self.journal.add("server", f"{name} sunucusu açıldı, kapatılana kadar açık kalacak")
+            return
+        if not server_up(image_app):
+            return
+        if image_app.busy and not force:
+            raise ValueError(f"{name} şu an çalışıyor, yine de kapatmak için onayla")
+        self.host.stop_image_app()
+        self.server_seen = False
+        # What was held back for it no longer stands. The low RAM was most likely its own.
+        self.held_until = self.keep_off_until = self.ram_backoff_until = self.next_start = 0.0
+        self.journal.add("server", f"{name} sunucusu kapatıldı, Kamil dönüyor")
+
+    def _watch_server(self) -> None:
+        """Anyone may start or stop the unit by hand, and it may crash. Say so, and take back the memory it held."""
+        up = server_up(self.host.image_app())
+        if self.server_seen is not None and up != self.server_seen:
+            self.journal.add("server", f"{server_name()} sunucusu {'açıldı' if up else 'kapandı'}")
+            if not up:
+                self.ram_backoff_until = self.next_start = 0.0
+        self.server_seen = up
 
     def acquire(self) -> str | None:
         """Makes the model ready. Returns None when it is, otherwise the reason it cannot run."""
@@ -208,7 +300,7 @@ class Aziz:
         self.stop_owed = True
         try:
             interrupted = self._interrupt_gpu_jobs("görsel uygulaması GPU'yu istedi")
-            self.stop_owed = any(job.gpu for job in self._with_status("running"))
+            self.stop_owed = bool(self._stoppable_gpu_jobs())
         except Exception:  # noqa: BLE001 - the model must still leave
             log.exception("preempt: could not stop the GPU job")
         try:
@@ -225,11 +317,22 @@ class Aziz:
 
     def tick(self) -> None:
         """One watch round. Job handling comes first and cannot stop the rest: the model's own rules always run."""
+        if self.reopen_after_reboot:
+            self.reopen_after_reboot = False
+            try:
+                if self.host.image_app_known():
+                    self.set_server(True)
+            except (*HOST_ERRORS, RuntimeError) as error:
+                log.warning("could not open the server after a reboot: %s", error)
         try:
             self._manage_jobs()
         except Exception:  # noqa: BLE001 - whatever a job did, the model logic below still runs
             log.exception("job round failed")
             self.journal.add("problem", "İşleri yönetirken bir hata oldu, Kamil etkilenmedi")
+        try:
+            self._watch_server()
+        except Exception:  # noqa: BLE001 - only the logbook depends on this
+            log.exception("could not look at the server")
         if not self.host.llm_active():
             self.waking_since = None
             self.up_since_tick = None
@@ -304,6 +407,10 @@ class Aziz:
         with self._jobs_lock:
             return [job for job in self.jobs if job.status in statuses]
 
+    def _stoppable_gpu_jobs(self) -> list[Job]:
+        """A server stops only when someone says so, so nothing that makes room may count it."""
+        return [job for job in self._with_status("running") if job.gpu and not job.server]
+
     def gpu_reserved(self) -> bool:
         return self.claim is not None or any(job.gpu for job in self._with_status("running"))
 
@@ -312,6 +419,7 @@ class Aziz:
 
     def submit(
         self, job_id: str, label: str, gpu: bool, next_gpu_likely: bool, restart: bool = True, max_minutes: int | None = None,
+        server: bool = False,
     ) -> Job:
         # fullmatch: with match and $, a trailing newline would reach the unit name.
         if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
@@ -320,16 +428,19 @@ class Aziz:
         seconds = default if max_minutes is None else int(max_minutes) * 60
         if not 0 < seconds <= LONGEST_JOB_SECONDS:
             raise ValueError("geçersiz iş süresi")
+        if server:
+            seconds, next_gpu_likely, restart = 0, False, True  # no limit, nothing to forecast, and back after a reboot
         clean = "".join(char for char in str(label) if char.isprintable())[:LABEL_CHARS]
         with self._jobs_lock:
             if any(job.id == job_id and job.status in ("queued", "running") for job in self.jobs):
                 raise ValueError("bu adda bir iş zaten var")
             if sum(job.status in ("queued", "running") for job in self.jobs) >= MAX_JOBS:
                 raise ValueError("kuyruk dolu")
-            job = Job(job_id, clean, bool(gpu), bool(next_gpu_likely), bool(restart), seconds, submitted_at=time.time())
+            job = Job(job_id, clean, bool(gpu), bool(next_gpu_likely), bool(restart), seconds, bool(server), submitted_at=time.time())
             self.jobs = [other for other in self.jobs if other.id != job_id] + [job]
             self._save_jobs()
-        self.journal.add("job", f"Yeni iş geldi: {job.label or job.id} ({'GPU' if job.gpu else 'işlemci'})")
+        kind = "sunucu" if job.server else "iş"
+        self.journal.add("job", f"Yeni {kind} geldi: {job.label or job.id} ({'GPU' if job.gpu else 'işlemci'})")
         return job
 
     def job(self, job_id: str) -> Job | None:
@@ -372,6 +483,8 @@ class Aziz:
             return
         if self.mode == "compute":
             raise ValueError("GPU Compute modunda, önce AI-Asistan'a al")
+        if server_up(self.host.image_app()) or any(job.server and job.gpu for job in self._with_status("running")):
+            raise ValueError("GPU'da açık bir sunucu var, önce onu kapat")
         self.priority_until = self.clock() + PRIORITY_SECONDS
         self.keep_off_until = self.ram_backoff_until = self.next_start = 0.0
         self.question_during_job = False
@@ -415,7 +528,7 @@ class Aziz:
     def _interrupt_gpu_jobs(self, note: str) -> bool:
         self.claim = None
         self.answer_wait_since = None
-        running = [job for job in self._with_status("running") if job.gpu]
+        running = self._stoppable_gpu_jobs()
         for job in running:
             self._interrupt(job, note)
         return bool(running)
@@ -431,7 +544,7 @@ class Aziz:
                 continue
             state = self.host.job_state(job.unit)
             if state not in ENDED_STATES:
-                if age > (job.max_seconds or DEFAULT_GPU_JOB_SECONDS):
+                if not job.server and age > (job.max_seconds or DEFAULT_GPU_JOB_SECONDS):
                     self.host.stop_job(job.unit)
                     self._ended(job, "failed", "süresi doldu")
                 continue
@@ -456,7 +569,7 @@ class Aziz:
             self.question_during_job = False
 
     def _guard_memory(self) -> None:
-        running = self._with_status("running")
+        running = [job for job in self._with_status("running") if not job.server]
         if not running:
             return
         available = self.host.available_ram_gib()
@@ -517,8 +630,11 @@ class Aziz:
 
     def _next_gpu_job(self) -> None:
         job = next((job for job in self._with_status("queued") if job.gpu), None)
-        if job is None or any(other.gpu for other in self._with_status("running")):
+        running = [other for other in self._with_status("running") if other.gpu]
+        if job is None or running:
             self.claim = None
+            if job is not None and running[0].server:
+                self._note(job, f"{running[0].label or running[0].id} sunucusu açık")
             return
         reason = self._gpu_job_waits()
         if reason:
@@ -564,7 +680,7 @@ class Aziz:
         # Every round, not once: a job whose stop failed is stopped again until it goes.
         if self.host.image_app().busy or self.clock() < self.held_until or self.stop_owed:
             self._interrupt_gpu_jobs("görsel uygulaması GPU'yu istedi")
-            self.stop_owed = any(job.gpu for job in self._with_status("running"))
+            self.stop_owed = bool(self._stoppable_gpu_jobs())
         elif self.priority_active():
             self._interrupt_gpu_jobs("Kamil öne alındı")
         self._guard_memory()
@@ -597,17 +713,24 @@ class Aziz:
             system = {}
         with self._jobs_lock:
             jobs = [
-                {"id": job.id, "label": job.label, "gpu": job.gpu, "status": job.status, "note": job.note,
+                {"id": job.id, "label": job.label, "gpu": job.gpu, "server": job.server, "status": job.status, "note": job.note,
                  "startedAt": job.started_at or None, "finishedAt": job.finished_at or None}
                 for job in self.jobs
             ]
+        up = server_up(image_app)
+        try:
+            known = self.host.image_app_known()
+        except HOST_ERRORS:
+            known = up
         return {
-            "mode": self.mode,
+            # Compute while a server holds the GPU, whatever was chosen.
+            "mode": "compute" if up or any(job["gpu"] and job["server"] and job["status"] == "running" for job in jobs) else self.mode,
+            "server": {"name": server_name(), "known": known, "up": up, "busy": image_app.busy},
             "llmActive": active,
             "blocked": reason,
             "imageAppReachable": image_app.reachable,
             "gateMissing": image_app.reachable and not image_app.hooked,
-            "gpuOwner": "image" if image_app.busy else "job" if reserved else "kamil" if active else "free",
+            "gpuOwner": "image" if up else "job" if reserved else "kamil" if active else "free",
             "prioritySeconds": max(0, round(self.priority_until - self.clock())),
             "keepOffSeconds": max(0, round(self.keep_off_until - self.clock())) if not active else 0,
             "jobs": jobs,

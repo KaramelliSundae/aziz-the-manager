@@ -177,7 +177,7 @@ def sync(root: Path) -> dict:
 
 
 def run_job(root: Path, command: str, gpu: bool = False, next_gpu: str = "unlikely", restart: bool = True,
-            max_minutes: int = 0, label: str = "") -> dict:
+            max_minutes: int = 0, label: str = "", server: bool = False) -> dict:
     require_enabled(root)
     if next_gpu not in ("likely", "unlikely"):
         raise OffloadError("next_gpu must be likely or unlikely")
@@ -188,10 +188,10 @@ def run_job(root: Path, command: str, gpu: bool = False, next_gpu: str = "unlike
     quoted = " ".join(json.dumps(word) for word in words.split(" "))
     kind = "gpu" if gpu else "cpu"
     submitted = call(
-        f"submit {job} {synced['project']} {kind} {next_gpu} {'restart' if restart else 'norestart'} {int(max_minutes)} {quoted}",
+        f"submit {job} {synced['project']} {kind} {next_gpu} {'server' if server else 'restart' if restart else 'norestart'} {int(max_minutes)} {quoted}",
         command.encode(),
     )
-    return {"job": job, "status": submitted.get("status"), "gpu": gpu, "sync": synced}
+    return {"job": job, "status": submitted.get("status"), "gpu": gpu, "server": server, "sync": synced}
 
 
 def wait_job(job: str, timeout: float = 600.0) -> dict:
@@ -243,6 +243,7 @@ def main() -> int:
     run.add_argument("--max-minutes", type=int, default=0)
     run.add_argument("--label", default="")
     run.add_argument("--wait", action="store_true")
+    run.add_argument("--server", action="store_true", help="stays up until `offload cancel`")
     run.add_argument("job_command", nargs=argparse.REMAINDER)
     for name in ("job", "cancel"):
         commands.add_parser(name).add_argument("job")

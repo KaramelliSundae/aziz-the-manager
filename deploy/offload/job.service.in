@@ -18,7 +18,7 @@ Restart=no
 # Short, so a preempt can hand the GPU to the image app within its 20 seconds.
 TimeoutStopSec=8
 KillMode=control-group
-RuntimeMaxSec=1d
+RuntimeMaxSec=@RUNTIME@
 
 # Everything else on the machine comes first.
 Nice=15

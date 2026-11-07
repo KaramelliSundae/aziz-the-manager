@@ -228,7 +228,7 @@ def test_a_silent_image_app_is_not_taken_for_a_stopped_one(aziz, host):
     host.image_app_state = ImageApp(reachable=False, running=True)
     aziz.submit("render", "işle", True, False)
     aziz.tick()
-    assert host.started_jobs == [] and host.stops == 0 and "yanıt" in aziz.job("render").note
+    assert host.started_jobs == [] and "yanıt" in aziz.job("render").note
     host.image_app_state = ImageApp(reachable=False)  # really stopped: the GPU is free
     aziz.tick()
     assert host.started_jobs == [GPU_UNIT]

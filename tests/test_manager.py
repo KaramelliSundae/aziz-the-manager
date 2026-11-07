@@ -35,7 +35,7 @@ IMAGE_APP_CACHE_MIB = 846
 
 class FakeHost:
     def __init__(self):
-        self.image_app_state = ImageApp(reachable=True, hooked=True)
+        self.image_app_state = ImageApp(reachable=False)
         self.foreign = 0
         self.ram = 17.0
         self.active = False
@@ -49,9 +49,23 @@ class FakeHost:
         self.job_states = {}
         self.started_jobs = []
         self.stopped_jobs = []
+        self.image_app_is_known = False  # most machines name no server; tests/test_servers.py has one
+        self.image_app_starts = 0
+        self.image_app_stops = 0
 
     def image_app(self):
         return self.image_app_state
+
+    def image_app_known(self):
+        return self.image_app_is_known
+
+    def start_image_app(self):
+        self.image_app_starts += 1
+        self.image_app_state = ImageApp(reachable=True, hooked=True, running=True)
+
+    def stop_image_app(self):
+        self.image_app_stops += 1
+        self.image_app_state = ImageApp(reachable=False)
 
     def foreign_gpu_mib(self):
         return self.foreign
@@ -141,8 +155,9 @@ def test_running_model_is_not_started_twice(arbiter, host):
 @pytest.mark.parametrize(
     ("change", "word"),
     [
-        (lambda h: setattr(h, "image_app_state", ImageApp(True, True, busy=True)), "çalışıyor"),
-        (lambda h: setattr(h, "image_app_state", ImageApp(True, hooked=False)), "kancası"),
+        (lambda h: setattr(h, "image_app_state", ImageApp(True, True, busy=True)), "sunucusu açık"),
+        (lambda h: setattr(h, "image_app_state", ImageApp(True, hooked=False)), "sunucusu açık"),
+        (lambda h: setattr(h, "image_app_state", ImageApp(False, running=True)), "sunucusu açık"),
         (lambda h: setattr(h, "foreign", FOREIGN_GPU_MIB + 1), "başka"),
     ],
 )
@@ -192,11 +207,17 @@ def test_model_stays_off_when_gpu_memory_is_already_full(arbiter, host):
     assert host.starts == 0
 
 
-IDLE_IMAGE_APP = ImageApp(reachable=True, hooked=True)  # its model may still be in RAM
+NO_SERVER = ImageApp(reachable=False)
+UP_AND_IDLE = ImageApp(reachable=True, hooked=True)  # up counts, whatever it is doing; its model may be in RAM
 
 
-def test_model_comes_back_by_itself_once_image_app_is_idle(arbiter, host):
-    host.image_app_state = IDLE_IMAGE_APP
+def test_model_waits_on_disk_while_the_server_is_up_even_if_idle(arbiter, host, clock):
+    host.image_app_state = UP_AND_IDLE
+    for _ in range(3):
+        clock.now += 24 * 3600
+        arbiter.tick()
+    assert host.starts == 0
+    host.image_app_state = NO_SERVER
     arbiter.tick()
     assert host.starts == 1
 
@@ -207,8 +228,8 @@ def test_model_comes_back_when_image_app_is_stopped(arbiter, host):
     assert host.starts == 1
 
 
-def test_model_starts_itself_beside_a_image_app_that_keeps_its_model_in_ram(arbiter, host):
-    arbiter.tick()  # the default state: the image app reachable and idle
+def test_model_starts_itself_when_no_server_is_up(arbiter, host):
+    arbiter.tick()
     assert host.starts == 1
 
 
@@ -232,14 +253,14 @@ def test_model_stays_off_while_image_app_needs_the_gpu(arbiter, host, state):
 
 
 def test_compute_mode_keeps_the_model_off(arbiter, host):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     arbiter.set_mode("compute")
     arbiter.tick()
     assert host.starts == 0
 
 
 def test_model_stays_off_during_the_hold_after_a_preempt(arbiter, host, clock):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     arbiter.preempt()
     arbiter.tick()
     assert host.starts == 0
@@ -249,7 +270,7 @@ def test_model_stays_off_during_the_hold_after_a_preempt(arbiter, host, clock):
 
 
 def test_model_does_not_start_itself_without_room(arbiter, host):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     host.ram = MIN_RAM_GIB - 1
     arbiter.tick()
     assert host.starts == 0
@@ -260,7 +281,7 @@ def test_model_does_not_start_itself_without_room(arbiter, host):
 
 
 def test_a_crashing_model_is_not_restarted_every_round(arbiter, host, clock):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     arbiter.tick()
     host.active = False  # it died straight away
     arbiter.tick()
@@ -296,7 +317,7 @@ def test_low_ram_stop_is_not_undone_by_itself_at_once(arbiter, host, clock):
 
 
 def test_full_cycle_model_leaves_for_a_job_and_returns_after_it(arbiter, host, clock):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     arbiter.tick()
     assert host.active is True
 
@@ -308,13 +329,13 @@ def test_full_cycle_model_leaves_for_a_job_and_returns_after_it(arbiter, host, c
     arbiter.tick()
     assert host.active is False
 
-    host.image_app_state = IDLE_IMAGE_APP  # finished; the image app may keep its model in RAM
+    host.image_app_state = NO_SERVER  # finished; the image app may keep its model in RAM
     arbiter.tick()
     assert host.active is True and host.starts == 2
 
 
 def test_watch_stops_the_default_model_for_a_job_that_skipped_the_hand_over(arbiter, host):
-    host.image_app_state = IDLE_IMAGE_APP
+    host.image_app_state = NO_SERVER
     arbiter.tick()
     host.image_app_state = ImageApp(True, True, busy=True)
     arbiter.tick()
@@ -475,7 +496,7 @@ def test_http_acquire_reports_why_it_cannot_run(http, host):
     host.image_app_state = ImageApp(True, True, busy=True)
     response = httpx.post(f"{http}/acquire")
     assert response.status_code == 409
-    assert "çalışıyor" in response.json()["reason"]
+    assert "sunucusu açık" in response.json()["reason"]
 
 
 def test_http_acquire_returns_the_model_address(http):

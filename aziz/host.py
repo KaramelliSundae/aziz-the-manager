@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 LLM_URL = "http://127.0.0.1:8422"
-# The program that always comes first on the GPU, and how to reach it. Set in /etc/aziz/env.
+# The server this machine names, and how to reach it. Up only when someone asked for it. Set in /etc/aziz/env.
 IMAGE_APP_HEALTH = os.environ.get("AZIZ_IMAGE_APP_HEALTH", "http://127.0.0.1:8000/v1/health")
 LLM_UNIT = "ai-ders-llm.service"
 IMAGE_APP_UNIT = os.environ.get("AZIZ_IMAGE_APP_UNIT", "image-app.service")
@@ -45,6 +45,9 @@ class Host(Protocol):
     def start_llm(self) -> None: ...
     def stop_llm(self) -> None: ...
     def llm_busy(self) -> bool: ...
+    def image_app_known(self) -> bool: ...
+    def start_image_app(self) -> None: ...
+    def stop_image_app(self) -> None: ...
     def start_job(self, unit: str) -> None: ...
     def stop_job(self, unit: str) -> None: ...
     def job_state(self, unit: str) -> str: ...
@@ -92,9 +95,20 @@ class SystemHost:
 
     def _image_app_service_up(self) -> bool:
         try:
-            return subprocess.run(["systemctl", "is-active", "--quiet", IMAGE_APP_UNIT], timeout=10).returncode == 0
+            # While it is still starting it counts as up too, or the model could slip in before its load.
+            state = subprocess.run(["systemctl", "is-active", IMAGE_APP_UNIT], capture_output=True, text=True, timeout=10).stdout.strip()
+            return state in ("active", "activating", "reloading")
         except (OSError, subprocess.SubprocessError):
             return True  # not knowing counts as up: a job waits, the image app is never at risk
+
+    def image_app_known(self) -> bool:
+        return self.job_known(IMAGE_APP_UNIT)
+
+    def start_image_app(self) -> None:
+        subprocess.run(["systemctl", "start", "--no-block", IMAGE_APP_UNIT], check=True, capture_output=True, timeout=10)
+
+    def stop_image_app(self) -> None:
+        subprocess.run(["systemctl", "stop", "--no-block", IMAGE_APP_UNIT], check=True, capture_output=True, timeout=10)
 
     def foreign_gpu_mib(self) -> int:
         """Memory of GPU processes that are neither the model nor the image app, whose work the queue shows."""

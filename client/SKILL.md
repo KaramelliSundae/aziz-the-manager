@@ -18,6 +18,7 @@ Heavy work goes to the owner's home server. **Aziz**, the manager there, decides
 | Edits, searches, small and quick tests | This Mac |
 | Builds, big test suites, data processing | Server, CPU |
 | Work that truly needs the GPU | Server, `gpu: true` |
+| Something that must stay up, such as an API | Server, `server: true` |
 
 - Before a GPU job, tell the owner in one line that Kamil's local model will be offline while it runs.
 - A job without `gpu: true` cannot see the GPU, so a wrong guess fails clearly. Don't ask for the GPU just in case: keeping Kamil available is the owner's main goal.
@@ -30,6 +31,10 @@ Every GPU job says how likely **more GPU work is in the next 15-20 minutes**, as
 
 When plans change or GPU work is done, send `offload_forecast` with `unlikely` so Kamil returns at once.
 
+## Servers
+
+A job ends by itself. A server (`server: true`) stays up until `offload_cancel`, or until the owner stops it, with no time limit. Nothing else stops it. A GPU server keeps Kamil offline for all that time, so tell the owner in one line first, and cancel it as soon as it is no longer needed.
+
 ## Running
 
 Use the MCP tools (`offload_run`, `offload_job`, `offload_wait`, `offload_logs`, `offload_pull`, `offload_cancel`, `offload_server`, `offload_files`), or the same operations through `~/.claude/skills/offload/scripts/offload.py` if the tools aren't there.
@@ -41,7 +46,7 @@ Use the MCP tools (`offload_run`, `offload_job`, `offload_wait`, `offload_logs`,
 ## What to expect
 
 - **Jobs can be interrupted.** The image app comes first, and the owner can put Kamil first from the app. An interrupted job restarts from the beginning, at most 3 times; read `note`. Send `restart: false` when rerunning isn't safe, such as anything that deploys or sends something.
-- **Queued is normal.** `note` says what it waits for. Don't resubmit.
+- **Queued is normal.** `note` says what it waits for, such as a server that holds the GPU. Don't resubmit.
 - **Jobs have the internet but not the local network.** They can't reach this machine's services, the home network or the tailnet.
 - **Limits:** 8 GB of memory, 8 CPU cores, 4 hours on the GPU or 12 on CPU unless `max_minutes` says otherwise, up to a day.
 - **Secrets never leave this Mac,** even tracked ones: `.env`, keys, certificates, `client_secret*`, `credentials*`, anything with `password` or `secret` in its name. If a build needs one, ask the owner rather than renaming it to get past the filter. `offload_files` shows what would be copied.
